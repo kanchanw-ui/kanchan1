@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  invoice-qa:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./invoice_qa.db:/app/invoice_qa.db
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    restart: unless-stopped
+
