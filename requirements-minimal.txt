@@ -1,0 +1,20 @@
+# Minimal requirements for deployment - use if main requirements.txt fails
+streamlit
+pandas
+openpyxl
+pypdf2
+pdfplumber
+reportlab
+Pillow
+matplotlib
+plotly
+langchain
+langchain-openai
+openai
+streamlit-option-menu
+gunicorn
+python-multipart
+python-docx
+numpy
+seaborn
+
