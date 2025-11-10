@@ -119,6 +119,32 @@ class OutputGenerator:
         if not issues:
             return
         
+        def to_scalar_string(value):
+            """Normalize any value (including pandas/numpy/Series) to a safe string for Excel."""
+            try:
+                import numpy as np  # lazy import safe
+            except Exception:
+                np = None
+            # Unwrap pandas Series
+            if isinstance(value, pd.Series):
+                value = value.iloc[0] if len(value) > 0 else ""
+            # Convert pandas Timestamp to iso string
+            if hasattr(value, "strftime"):
+                try:
+                    return value.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            # Handle numpy scalar
+            if np is not None and isinstance(value, getattr(np, "generic", ())):
+                try:
+                    value = value.item()
+                except Exception:
+                    pass
+            # Fallbacks
+            if value is None:
+                return ""
+            return str(value)
+        
         sheet['A1'] = f'{title} Details'
         sheet['A1'].font = Font(size=14, bold=True)
         
@@ -137,7 +163,7 @@ class OutputGenerator:
         for row_idx, issue in enumerate(issues, start=4):
             for col_idx, header in enumerate(headers, start=1):
                 cell = sheet.cell(row=row_idx, column=col_idx)
-                cell.value = issue.get(header, '')
+                cell.value = to_scalar_string(issue.get(header, ''))
                 
                 # Color code by severity
                 if 'severity' in issue:
@@ -153,6 +179,29 @@ class OutputGenerator:
     
     def _create_data_sheet(self, sheet, df, title):
         """Create sheet for invoice/PO data"""
+        def to_scalar(value):
+            if isinstance(value, pd.Series):
+                return to_scalar(value.iloc[0] if len(value) > 0 else "")
+            # Normalize pandas NaN
+            if pd.isna(value):
+                return ""
+            # Dates
+            if hasattr(value, "strftime"):
+                try:
+                    return value.strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            try:
+                import numpy as np
+                if isinstance(value, np.generic):
+                    try:
+                        return value.item()
+                    except Exception:
+                        return str(value)
+            except Exception:
+                pass
+            return value
+
         sheet['A1'] = f'{title} Data'
         sheet['A1'].font = Font(size=14, bold=True)
         
@@ -168,7 +217,8 @@ class OutputGenerator:
             for col_idx, col_name in enumerate(df.columns, start=1):
                 cell = sheet.cell(row=row_idx, column=col_idx)
                 value = df_row[col_name]
-                cell.value = value if pd.notna(value) else ''
+                value = to_scalar(value)
+                cell.value = "" if (value is None) else value
         
         # Auto-adjust column widths
         for col_idx in range(1, len(df.columns) + 1):

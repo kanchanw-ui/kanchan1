@@ -59,8 +59,10 @@ class InvoiceQAAgent:
         prompt = f"""You are an expert invoice auditor. Compare the following invoice against the purchase order and identify:
 
 1. **Rate Mismatches**: Items where the unit price in the invoice differs from the purchase order
-2. **Duplicates**: Items that appear multiple times in the invoice
-3. **Unusual Entries**: Items in invoice that are not in PO, or suspicious patterns
+2. **Quantity Mismatches**: Items where quantities differ between invoice and PO
+3. **Date Mismatches**: Items where dates (invoice date, order date, delivery date, etc.) differ significantly
+4. **Duplicates**: Items that appear multiple times in the invoice
+5. **Unusual Entries**: Items in invoice that are not in PO, or suspicious patterns
 
 **INVOICE DATA:**
 {invoice_str}
@@ -72,11 +74,11 @@ Please analyze and return a JSON response with the following structure:
 {{
     "mismatches": [
         {{
-            "type": "Rate Mismatch",
+            "type": "Rate Mismatch / Quantity Mismatch / Date Mismatch",
             "item": "item name/code",
             "invoice_value": "value from invoice",
             "po_value": "value from PO",
-            "difference": "difference amount",
+            "difference": "difference amount/days",
             "severity": "High/Medium/Low",
             "description": "detailed explanation"
         }}
@@ -102,6 +104,7 @@ Please analyze and return a JSON response with the following structure:
 Focus on:
 - Price discrepancies (even small ones)
 - Quantity mismatches
+- Date differences (invoice dates, order dates, delivery dates, etc.)
 - Items in invoice but not in PO
 - Items in PO but missing in invoice
 - Duplicate line items
@@ -290,6 +293,40 @@ Return ONLY valid JSON, no additional text."""
                                     })
                         except (ValueError, TypeError):
                             pass
+                    
+                    # Check dates
+                    from comparison_utils import find_column_by_pattern, compare_dates
+                    
+                    try:
+                        date_patterns = [r'date', r'invoice\s*date', r'po\s*date', r'order\s*date', r'ship\s*date', r'delivery\s*date']
+                        invoice_date_col = find_column_by_pattern(invoice_df, date_patterns)
+                        po_date_col = find_column_by_pattern(po_df, date_patterns)
+                        
+                        if invoice_date_col and po_date_col:
+                            inv_date = inv_row[invoice_date_col] if invoice_date_col in inv_row.index else None
+                            po_date = po_row[po_date_col] if po_date_col in po_row.index else None
+                            
+                            # Ensure we get scalar values, not Series
+                            if isinstance(inv_date, pd.Series):
+                                inv_date = inv_date.iloc[0] if len(inv_date) > 0 else None
+                            if isinstance(po_date, pd.Series):
+                                po_date = po_date.iloc[0] if len(po_date) > 0 else None
+                            
+                            if inv_date is not None and po_date is not None:
+                                date_diff = compare_dates(inv_date, po_date, tolerance_days=0)
+                                if date_diff:
+                                    mismatches.append({
+                                        'type': 'Date Mismatch',
+                                        'item': str(item),
+                                        'invoice_value': date_diff['invoice_date'],
+                                        'po_value': date_diff['po_date'],
+                                        'difference': f"{date_diff['difference_days']} days",
+                                        'severity': 'Medium' if date_diff['difference_days'] <= 30 else 'High',
+                                        'description': f'Date mismatch: Invoice={date_diff["invoice_date"]}, PO={date_diff["po_date"]} (diff: {date_diff["difference_days"]} days)'
+                                    })
+                    except Exception:
+                        # Skip date comparison if there's an error
+                        pass
         
         # Check for items in PO but not in invoice
         if invoice_item_col and po_item_col:

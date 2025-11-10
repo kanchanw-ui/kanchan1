@@ -97,50 +97,85 @@ class FileParser:
             return pd.DataFrame({'Content': [text]})
     
     def standardize_columns(self, df):
-        """Standardize column names to common formats"""
-        column_mapping = {
-            # Item/Product columns
-            'item': 'Item',
-            'item_no': 'Item',
-            'item_number': 'Item',
-            'product': 'Item',
-            'product_code': 'Item',
-            'sku': 'Item',
-            
+        """Dynamically standardize column names to common formats"""
+        import re
+        
+        # Expanded column mapping with more variations
+        column_patterns = {
+            # Item/Product columns - more flexible matching
+            'item': [
+                r'item', r'item_no', r'item_number', r'item\s*code', r'item_code',
+                r'product', r'product_code', r'product\s*id', r'product_id',
+                r'sku', r'part\s*number', r'part_number', r'part\s*no', r'part_no',
+                r'code', r'item\s*name', r'product\s*name'
+            ],
             # Description columns
-            'description': 'Description',
-            'desc': 'Description',
-            'product_description': 'Description',
-            'item_description': 'Description',
-            
+            'description': [
+                r'description', r'desc', r'product_description', r'item_description',
+                r'name', r'product\s*name', r'item\s*name', r'details', r'specification'
+            ],
             # Quantity columns
-            'quantity': 'Quantity',
-            'qty': 'Quantity',
-            'qty.': 'Quantity',
-            'amount': 'Quantity',
-            
+            'quantity': [
+                r'quantity', r'qty', r'qty\.', r'amount', r'qty\s*ordered', r'qty\s*shipped',
+                r'quantity\s*ordered', r'quantity\s*shipped', r'qty\s*received'
+            ],
             # Price columns
-            'unit_price': 'Unit Price',
-            'price': 'Unit Price',
-            'rate': 'Unit Price',
-            'unit cost': 'Unit Price',
-            'cost': 'Unit Price',
-            
+            'unit_price': [
+                r'unit\s*price', r'unit_price', r'price', r'rate', r'unit\s*cost', r'cost',
+                r'unit\s*rate', r'price\s*per\s*unit', r'unit\s*amount', r'unit\s*value'
+            ],
             # Total columns
-            'total': 'Total',
-            'total_price': 'Total',
-            'amount': 'Total',
-            'line_total': 'Total',
+            'total': [
+                r'total', r'total_price', r'total\s*amount', r'line_total', r'line\s*total',
+                r'amount', r'subtotal', r'extended\s*price', r'extended\s*amount'
+            ],
+            # Date columns
+            'date': [
+                r'date', r'invoice\s*date', r'po\s*date', r'order\s*date', r'ship\s*date',
+                r'delivery\s*date', r'due\s*date', r'issue\s*date', r'created\s*date',
+                r'transaction\s*date', r'bill\s*date', r'invoice\s*date', r'purchase\s*date'
+            ],
+            # Additional common fields
+            'vendor': [
+                r'vendor', r'supplier', r'seller', r'provider', r'company', r'vendor\s*name'
+            ],
+            'invoice_number': [
+                r'invoice\s*number', r'invoice\s*no', r'invoice_no', r'inv\s*number',
+                r'inv\s*no', r'invoice\s*id', r'invoice_id', r'invoice\s*#', r'inv\s*#'
+            ],
+            'po_number': [
+                r'po\s*number', r'po\s*no', r'po_no', r'purchase\s*order\s*number',
+                r'purchase\s*order\s*no', r'po\s*id', r'po_id', r'po\s*#', r'p\.o\.\s*number'
+            ]
         }
         
         # Create a copy
         df_standardized = df.copy()
+        column_mapping = {}
         
-        # Map columns (case-insensitive)
+        # Map columns using pattern matching (case-insensitive)
         for old_col in df.columns:
-            old_col_lower = old_col.lower().strip()
-            if old_col_lower in column_mapping:
-                df_standardized = df_standardized.rename(columns={old_col: column_mapping[old_col_lower]})
+            old_col_lower = str(old_col).lower().strip()
+            
+            # Try to match against patterns
+            matched = False
+            for standard_name, patterns in column_patterns.items():
+                for pattern in patterns:
+                    if re.search(pattern, old_col_lower, re.IGNORECASE):
+                        column_mapping[old_col] = standard_name.replace('_', ' ').title()
+                        matched = True
+                        break
+                if matched:
+                    break
+            
+            # If no pattern match, keep original but clean it
+            if not matched:
+                # Clean column name but keep it
+                cleaned = old_col.strip()
+                column_mapping[old_col] = cleaned
+        
+        # Apply mapping
+        df_standardized = df_standardized.rename(columns=column_mapping)
         
         return df_standardized
 

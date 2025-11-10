@@ -1,91 +1,207 @@
+"""
+Create sample PO and Invoice files with mismatches, duplicates, and anomalies
+Generates multiple sets for testing different scenarios
+"""
+
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+import os
 
-# Create sample Invoice data with duplicates and mismatches
-invoice_data = {
-    'Item': ['A001', 'A002', 'A001', 'A003', 'A004', 'A002', 'A005'],  # A001 and A002 are duplicates
-    'Description': [
-        'Widget Type A',
-        'Widget Type B',
-        'Widget Type A',  # Duplicate
-        'Widget Type C',
-        'Widget Type D',
-        'Widget Type B',  # Duplicate
-        'Widget Type E'
-    ],
-    'Quantity': [10, 5, 8, 15, 20, 3, 12],  # Some quantities differ from PO
-    'Unit Price': [25.50, 30.00, 25.50, 18.75, 22.00, 30.00, 35.50],  # Some prices differ from PO
-    'Total': [255.00, 150.00, 204.00, 281.25, 440.00, 90.00, 426.00]
-}
-
-# Create sample PO data
-po_data = {
-    'Item': ['A001', 'A002', 'A003', 'A004', 'A006'],  # A006 is in PO but not in invoice
-    'Description': [
-        'Widget Type A',
-        'Widget Type B',
-        'Widget Type C',
-        'Widget Type D',
-        'Widget Type F'
-    ],
-    'Quantity': [10, 5, 20, 20, 8],  # A003 quantity differs (15 in invoice, 20 in PO), A004 matches
-    'Unit Price': [25.00, 30.00, 18.75, 22.00, 40.00],  # A001 price differs (25.50 in invoice, 25.00 in PO)
-    'Total': [250.00, 150.00, 375.00, 440.00, 320.00]
-}
-
-# Create DataFrames
-invoice_df = pd.DataFrame(invoice_data)
-po_df = pd.DataFrame(po_data)
-
-# Create Excel files using pandas (simpler approach)
-def create_formatted_excel(df, filename, title):
-    # Use pandas to_excel which is simpler
-    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='Data', index=False)
+def create_sample_set(set_number, scenario_description):
+    """Create a set of PO and Invoice files with specific issues"""
+    
+    # Create directories if they don't exist
+    os.makedirs("sample_files", exist_ok=True)
+    
+    # Base data - Purchase Order
+    po_data = {
+        'Item': ['LAPTOP-001', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005'],
+        'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam'],
+        'Quantity': [5, 10, 8, 4, 6],
+        'Unit Price': [1200.00, 25.50, 89.99, 350.00, 45.00],
+        'Total': [6000.00, 255.00, 719.92, 1400.00, 270.00]
+    }
+    
+    # Create invoice data based on scenario
+    if set_number == 1:
+        # Set 1: Price Mismatches
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam'],
+            'Quantity': [5, 10, 8, 4, 6],
+            'Unit Price': [1250.00, 25.50, 95.00, 350.00, 50.00],  # Price mismatches
+            'Total': [6250.00, 255.00, 760.00, 1400.00, 300.00]
+        }
+        scenario = "Price Mismatches"
         
-        # Get the worksheet
-        ws = writer.sheets['Data']
+    elif set_number == 2:
+        # Set 2: Duplicates
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005', 'WEBCAM-005'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam', 'HD Webcam'],
+            'Quantity': [5, 10, 5, 8, 4, 6, 3],
+            'Unit Price': [1200.00, 25.50, 25.50, 89.99, 350.00, 45.00, 45.00],
+            'Total': [6000.00, 255.00, 127.50, 719.92, 1400.00, 270.00, 135.00]
+        }
+        scenario = "Duplicates"
         
-        # Style the header row
-        from openpyxl.styles import Font, PatternFill
-        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-        header_font = Font(bold=True, color="FFFFFF")
+    elif set_number == 3:
+        # Set 3: Both Mismatches and Duplicates
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam'],
+            'Quantity': [5, 10, 3, 8, 4, 6],
+            'Unit Price': [1250.00, 25.50, 25.50, 95.00, 350.00, 50.00],  # Price mismatches + duplicates
+            'Total': [6250.00, 255.00, 76.50, 760.00, 1400.00, 300.00]
+        }
+        scenario = "Mismatches and Duplicates"
         
-        for cell in ws[1]:  # First row (headers)
-            cell.fill = header_fill
-            cell.font = header_font
+    elif set_number == 4:
+        # Set 4: Quantity Mismatches
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam'],
+            'Quantity': [6, 10, 8, 5, 6],  # Quantity mismatches
+            'Unit Price': [1200.00, 25.50, 89.99, 350.00, 45.00],
+            'Total': [7200.00, 255.00, 719.92, 1750.00, 270.00]
+        }
+        scenario = "Quantity Mismatches"
+        
+    elif set_number == 5:
+        # Set 5: Multiple Issues (Mismatches, Duplicates, Anomalies)
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'MOUSE-002', 'KEYBOARD-003', 'MONITOR-004', 'WEBCAM-005', 'SPEAKER-006'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Wireless Mouse', 'Mechanical Keyboard', '27" Monitor', 'HD Webcam', 'Bluetooth Speaker'],
+            'Quantity': [5, 10, 2, 8, 4, 6, 3],
+            'Unit Price': [1250.00, 25.50, 25.50, 95.00, 350.00, 50.00, 75.00],  # Price mismatches + new item
+            'Total': [6250.00, 255.00, 51.00, 760.00, 1400.00, 300.00, 225.00]
+        }
+        scenario = "Multiple Issues"
+        
+    else:
+        # Default: Simple mismatches
+        invoice_data = {
+            'Item': ['LAPTOP-001', 'MOUSE-002', 'KEYBOARD-003'],
+            'Description': ['Dell Laptop 15"', 'Wireless Mouse', 'Mechanical Keyboard'],
+            'Quantity': [5, 10, 8],
+            'Unit Price': [1300.00, 30.00, 100.00],  # All prices higher
+            'Total': [6500.00, 300.00, 800.00]
+        }
+        scenario = "Simple Mismatches"
+    
+    # Create DataFrames
+    po_df = pd.DataFrame(po_data)
+    invoice_df = pd.DataFrame(invoice_data)
+    
+    # Create Excel files with formatting
+    po_filename = f"sample_files/sample_po_set{set_number}.xlsx"
+    invoice_filename = f"sample_files/sample_invoice_set{set_number}.xlsx"
+    
+    # Write PO file
+    with pd.ExcelWriter(po_filename, engine='openpyxl') as writer:
+        po_df.to_excel(writer, sheet_name='Purchase Order', index=False)
+        worksheet = writer.sheets['Purchase Order']
+        
+        # Format header
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
         
         # Auto-adjust column widths
-        for column in ws.columns:
+        for column in worksheet.columns:
             max_length = 0
-            column_letter = column[0].column_letter
+            column_letter = get_column_letter(column[0].column)
             for cell in column:
                 try:
-                    if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
                 except:
                     pass
             adjusted_width = min(max_length + 2, 50)
-            ws.column_dimensions[column_letter].width = adjusted_width
+            worksheet.column_dimensions[column_letter].width = adjusted_width
     
-    print(f"Created {filename}")
+    # Write Invoice file
+    with pd.ExcelWriter(invoice_filename, engine='openpyxl') as writer:
+        invoice_df.to_excel(writer, sheet_name='Invoice', index=False)
+        worksheet = writer.sheets['Invoice']
+        
+        # Format header
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        # Auto-adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = get_column_letter(column[0].column)
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+    
+    print(f"✅ Created Set {set_number}: {scenario}")
+    print(f"   PO: {po_filename}")
+    print(f"   Invoice: {invoice_filename}")
+    print()
+    
+    return po_filename, invoice_filename, scenario
 
-# Create the sample files
-create_formatted_excel(invoice_df, "sample_invoice.xlsx", "SAMPLE INVOICE")
-create_formatted_excel(po_df, "sample_po.xlsx", "SAMPLE PURCHASE ORDER")
+def main():
+    """Create all sample file sets"""
+    print("=" * 60)
+    print("Creating Sample PO and Invoice Files")
+    print("=" * 60)
+    print()
+    
+    scenarios = []
+    
+    # Create 5 different sets
+    for i in range(1, 6):
+        po_file, invoice_file, scenario = create_sample_set(i, "")
+        scenarios.append({
+            'set': i,
+            'po_file': po_file,
+            'invoice_file': invoice_file,
+            'scenario': scenario
+        })
+    
+    print("=" * 60)
+    print("Summary of Created Files:")
+    print("=" * 60)
+    print()
+    print("Set 1: Price Mismatches")
+    print("  - LAPTOP-001: $1200 → $1250")
+    print("  - KEYBOARD-003: $89.99 → $95.00")
+    print("  - WEBCAM-005: $45.00 → $50.00")
+    print()
+    print("Set 2: Duplicates")
+    print("  - MOUSE-002: Appears twice")
+    print("  - WEBCAM-005: Appears twice")
+    print()
+    print("Set 3: Mismatches + Duplicates")
+    print("  - Price mismatches on LAPTOP-001, KEYBOARD-003, WEBCAM-005")
+    print("  - MOUSE-002 appears twice")
+    print()
+    print("Set 4: Quantity Mismatches")
+    print("  - LAPTOP-001: Qty 5 → 6")
+    print("  - MONITOR-004: Qty 4 → 5")
+    print()
+    print("Set 5: Multiple Issues")
+    print("  - Price mismatches")
+    print("  - Duplicates (MOUSE-002)")
+    print("  - New item not in PO (SPEAKER-006)")
+    print()
+    print("=" * 60)
+    print("All files created in 'sample_files' folder")
+    print("=" * 60)
 
-print("\n✅ Sample files created successfully!")
-print("\nExpected Results:")
-print("=" * 60)
-print("DUPLICATES:")
-print("  - A001 appears 2 times in invoice")
-print("  - A002 appears 2 times in invoice")
-print("\nMISMATCHES:")
-print("  - A001: Price mismatch (Invoice: 25.50, PO: 25.00)")
-print("  - A003: Quantity mismatch (Invoice: 15, PO: 20)")
-print("\nANOMALIES:")
-print("  - A005: In invoice but not in PO")
-print("  - A006: In PO but not in invoice")
-print("=" * 60)
-
+if __name__ == "__main__":
+    main()

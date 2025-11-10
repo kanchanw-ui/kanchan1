@@ -294,7 +294,12 @@ def login_page():
         st.info("**Default Admin Account:** Username: `admin` | Password: `admin123`")
 
 def compare_basic(invoice_data, po_data):
-    """Basic rule-based comparison when AI is not available"""
+    """Dynamic rule-based comparison that handles any invoice/PO format"""
+    from comparison_utils import (
+        find_column_by_pattern, compare_dates, detect_column_type,
+        get_all_comparable_columns
+    )
+    
     mismatches = []
     duplicates = []
     anomalies = []
@@ -315,41 +320,22 @@ def compare_basic(invoice_data, po_data):
     invoice_df = invoice_data.copy()
     po_df = po_data.copy()
     
-    # Find item column
-    invoice_item_col = None
-    po_item_col = None
+    # Dynamically find all comparable columns
+    comparable_cols = get_all_comparable_columns(invoice_df, po_df)
     
-    item_keywords = ['item', 'item_no', 'item_number', 'product', 'product_code', 'sku', 'item code', 'item_code']
+    # Get item columns (for matching rows)
+    invoice_item_col = comparable_cols.get('item', {}).get('invoice')
+    po_item_col = comparable_cols.get('item', {}).get('po')
     
-    for col in invoice_df.columns:
-        col_lower = str(col).lower().strip()
-        if col_lower in item_keywords:
-            invoice_item_col = col
-            break
+    # Get other columns
+    invoice_price_col = comparable_cols.get('unit_price', {}).get('invoice')
+    po_price_col = comparable_cols.get('unit_price', {}).get('po')
     
-    for col in po_df.columns:
-        col_lower = str(col).lower().strip()
-        if col_lower in item_keywords:
-            po_item_col = col
-            break
+    invoice_qty_col = comparable_cols.get('quantity', {}).get('invoice')
+    po_qty_col = comparable_cols.get('quantity', {}).get('po')
     
-    # Find price columns
-    invoice_price_col = None
-    po_price_col = None
-    
-    price_keywords = ['unit price', 'price', 'rate', 'unit cost', 'cost', 'unit_price']
-    
-    for col in invoice_df.columns:
-        col_lower = str(col).lower().strip()
-        if col_lower in price_keywords:
-            invoice_price_col = col
-            break
-    
-    for col in po_df.columns:
-        col_lower = str(col).lower().strip()
-        if col_lower in price_keywords:
-            po_price_col = col
-            break
+    invoice_date_col = comparable_cols.get('date', {}).get('invoice')
+    po_date_col = comparable_cols.get('date', {}).get('po')
     
     # Check for duplicates
     if invoice_item_col:
@@ -389,6 +375,7 @@ def compare_basic(invoice_data, po_data):
             else:
                 po_row = po_matches.iloc[0]
                 
+                # Compare price/rate
                 if invoice_price_col and po_price_col:
                     try:
                         inv_price = pd.to_numeric(inv_row.get(invoice_price_col, 0), errors='coerce')
@@ -408,6 +395,55 @@ def compare_basic(invoice_data, po_data):
                                     'description': f'Unit price mismatch: Invoice={inv_price:.2f}, PO={po_price:.2f}'
                                 })
                     except (ValueError, TypeError):
+                        pass
+                
+                # Compare quantity
+                if invoice_qty_col and po_qty_col:
+                    try:
+                        inv_qty = pd.to_numeric(inv_row.get(invoice_qty_col, 0), errors='coerce')
+                        po_qty = pd.to_numeric(po_row.get(po_qty_col, 0), errors='coerce')
+                        
+                        if pd.notna(inv_qty) and pd.notna(po_qty):
+                            diff = abs(float(inv_qty) - float(po_qty))
+                            if diff > 0.01:
+                                mismatches.append({
+                                    'type': 'Quantity Mismatch',
+                                    'item': item,
+                                    'invoice_value': f"{inv_qty:.2f}",
+                                    'po_value': f"{po_qty:.2f}",
+                                    'difference': f"{diff:.2f}",
+                                    'severity': 'High',
+                                    'description': f'Quantity mismatch: Invoice={inv_qty:.2f}, PO={po_qty:.2f}'
+                                })
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Compare dates
+                if invoice_date_col and po_date_col:
+                    try:
+                        inv_date = inv_row[invoice_date_col] if invoice_date_col in inv_row.index else None
+                        po_date = po_row[po_date_col] if po_date_col in po_row.index else None
+                        
+                        # Ensure we get scalar values, not Series
+                        if isinstance(inv_date, pd.Series):
+                            inv_date = inv_date.iloc[0] if len(inv_date) > 0 else None
+                        if isinstance(po_date, pd.Series):
+                            po_date = po_date.iloc[0] if len(po_date) > 0 else None
+                        
+                        if inv_date is not None and po_date is not None:
+                            date_diff = compare_dates(inv_date, po_date, tolerance_days=0)
+                            if date_diff:
+                                mismatches.append({
+                                    'type': 'Date Mismatch',
+                                    'item': item,
+                                    'invoice_value': date_diff['invoice_date'],
+                                    'po_value': date_diff['po_date'],
+                                    'difference': f"{date_diff['difference_days']} days",
+                                    'severity': 'Medium' if date_diff['difference_days'] <= 30 else 'High',
+                                    'description': f'Date mismatch: Invoice={date_diff["invoice_date"]}, PO={date_diff["po_date"]} (diff: {date_diff["difference_days"]} days)'
+                                })
+                    except Exception as e:
+                        # Skip date comparison if there's an error
                         pass
         
         invoice_items = set(invoice_df[invoice_item_col].astype(str).str.strip())
@@ -861,10 +897,79 @@ def history_tab():
                 if st.button("View Details", key=f"view_{upload_id}", width='stretch'):
                     result_json = db.get_upload_result(upload_id)
                     if result_json:
-                        result = json.loads(result_json)
-                        st.session_state.comparison_results = result
-                        st.success("Results loaded. Switch to Results tab to view.")
-                        st.rerun()
+                        try:
+                            result = json.loads(result_json)
+                            st.session_state.comparison_results = result
+                            
+                            # Try to load the original invoice and PO data if files exist
+                            try:
+                                conn = db.get_connection()
+                                cursor = conn.cursor()
+                                cursor.execute('''
+                                    SELECT invoice_path, po_path 
+                                    FROM file_uploads 
+                                    WHERE id = ?
+                                ''', (upload_id,))
+                                file_paths = cursor.fetchone()
+                                conn.close()
+                                
+                                if file_paths:
+                                    invoice_path, po_path = file_paths
+                                    parser = FileParser()
+                                    
+                                    # Load invoice data
+                                    if invoice_path and os.path.exists(invoice_path):
+                                        try:
+                                            from io import BytesIO
+                                            with open(invoice_path, 'rb') as f:
+                                                file_content = f.read()
+                                            # Create a file-like object
+                                            class FileObj:
+                                                def __init__(self, name, content):
+                                                    self.name = name
+                                                    self._content = content
+                                                    self._pos = 0
+                                                def read(self):
+                                                    return self._content
+                                                def seek(self, pos):
+                                                    self._pos = pos
+                                            
+                                            invoice_file_obj = FileObj(os.path.basename(invoice_path), file_content)
+                                            st.session_state.invoice_data = parser.parse_file(invoice_file_obj)
+                                        except Exception:
+                                            pass
+                                    
+                                    # Load PO data
+                                    if po_path and os.path.exists(po_path):
+                                        try:
+                                            from io import BytesIO
+                                            with open(po_path, 'rb') as f:
+                                                file_content = f.read()
+                                            # Create a file-like object
+                                            class FileObj:
+                                                def __init__(self, name, content):
+                                                    self.name = name
+                                                    self._content = content
+                                                    self._pos = 0
+                                                def read(self):
+                                                    return self._content
+                                                def seek(self, pos):
+                                                    self._pos = pos
+                                            
+                                            po_file_obj = FileObj(os.path.basename(po_path), file_content)
+                                            st.session_state.po_data = parser.parse_file(po_file_obj)
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                # If file loading fails, continue without it
+                                pass
+                            
+                            # Set flag to switch to Results tab
+                            st.session_state.switch_to_results = True
+                            st.success("Results loaded successfully! Switching to Results tab...")
+                            st.rerun()
+                        except json.JSONDecodeError as e:
+                            st.error(f"Error parsing results: {str(e)}")
                     else:
                         st.warning("No results found for this upload.")
             
@@ -911,13 +1016,28 @@ def main():
                  (collective['total_duplicates'] or 0) + 
                  (collective['total_anomalies'] or 0))
     
+    # Check if we need to switch to Results tab
+    if st.session_state.get('switch_to_results', False):
+        # Force selection to Results tab
+        if 'selected_tab' not in st.session_state or st.session_state.selected_tab != "Results":
+            st.session_state.selected_tab = "Results"
+        st.session_state.switch_to_results = False
+        default_index = 1  # Results tab is index 1
+    else:
+        # Use stored selection or default
+        if 'selected_tab' in st.session_state:
+            tab_options = ["Upload", "Results", "Collective", "History"]
+            default_index = tab_options.index(st.session_state.selected_tab) if st.session_state.selected_tab in tab_options else 0
+        else:
+            default_index = 0
+    
     # Professional Tab menu
     selected = option_menu(
         menu_title=None,
         options=["Upload", "Results", "Collective", "History"],
         icons=["upload", "graph-up", "bar-chart", "clock-history"],
         menu_icon=None,
-        default_index=0,
+        default_index=default_index,
         orientation="horizontal",
         styles={
             "container": {
@@ -945,6 +1065,9 @@ def main():
             },
         }
     )
+    
+    # Store selected tab in session state
+    st.session_state.selected_tab = selected
     
     # Route to appropriate tab
     if selected == "Upload":
