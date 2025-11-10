@@ -1016,6 +1016,9 @@ def main():
                  (collective['total_duplicates'] or 0) + 
                  (collective['total_anomalies'] or 0))
     
+    # Tab options (single source of truth)
+    tab_options = ["Upload", "Results", "Collective", "History"]
+
     # Check if we need to switch to Results tab
     if st.session_state.get('switch_to_results', False):
         # Force selection to Results tab
@@ -1026,7 +1029,6 @@ def main():
     else:
         # Use stored selection or default
         if 'selected_tab' in st.session_state:
-            tab_options = ["Upload", "Results", "Collective", "History"]
             default_index = tab_options.index(st.session_state.selected_tab) if st.session_state.selected_tab in tab_options else 0
         else:
             default_index = 0
@@ -1034,11 +1036,12 @@ def main():
     # Professional Tab menu
     selected = option_menu(
         menu_title=None,
-        options=["Upload", "Results", "Collective", "History"],
+        options=tab_options,
         icons=["upload", "graph-up", "bar-chart", "clock-history"],
         menu_icon=None,
         default_index=default_index,
         orientation="horizontal",
+        key="main_nav",
         styles={
             "container": {
                 "padding": "0!important",
@@ -1067,7 +1070,8 @@ def main():
     )
     
     # Store selected tab in session state
-    st.session_state.selected_tab = selected
+    if selected != st.session_state.get("selected_tab"):
+        st.session_state.selected_tab = selected
     
     # Route to appropriate tab
     if selected == "Upload":
