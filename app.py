@@ -321,6 +321,33 @@ def compare_basic(invoice_data, po_data):
             return val.iloc[0] if len(val) > 0 else None
         return val
     
+    # Helper: parse price value, handling currency symbols, commas, etc.
+    def parse_price(value):
+        """Parse price value, handling various formats"""
+        if value is None:
+            return None
+        if isinstance(value, pd.Series):
+            if len(value) == 0:
+                return None
+            value = value.iloc[0]
+        if pd.isna(value):
+            return None
+        
+        # Convert to string and clean
+        price_str = str(value).strip()
+        if not price_str or price_str.lower() in ['nan', 'none', '']:
+            return None
+        
+        # Remove currency symbols and commas
+        price_str = price_str.replace(',', '').replace('$', '').replace('€', '').replace('£', '').replace('₹', '').replace('¥', '')
+        price_str = price_str.strip()
+        
+        # Try to convert to float
+        try:
+            return float(price_str)
+        except (ValueError, TypeError):
+            return None
+    
     mismatches = []
     duplicates = []
     anomalies = []
@@ -352,6 +379,21 @@ def compare_basic(invoice_data, po_data):
     invoice_price_col = comparable_cols.get('unit_price', {}).get('invoice')
     po_price_col = comparable_cols.get('unit_price', {}).get('po')
     
+    # Debug: Log detected columns
+    debug_info.append(f"Detected columns - Invoice Item: {invoice_item_col}, PO Item: {po_item_col}")
+    debug_info.append(f"Detected columns - Invoice Price: {invoice_price_col}, PO Price: {po_price_col}")
+    
+    # If price columns not found, try alternative detection
+    if not invoice_price_col or not po_price_col:
+        # Try more patterns for price detection
+        price_patterns = [r'unit\s*price', r'price', r'rate', r'cost', r'unit\s*cost', r'amount', r'unit\s*rate']
+        if not invoice_price_col:
+            invoice_price_col = find_column_by_pattern(invoice_df, price_patterns)
+        if not po_price_col:
+            po_price_col = find_column_by_pattern(po_df, price_patterns)
+        if invoice_price_col or po_price_col:
+            debug_info.append(f"Alternative detection - Invoice Price: {invoice_price_col}, PO Price: {po_price_col}")
+    
     invoice_qty_col = comparable_cols.get('quantity', {}).get('invoice')
     po_qty_col = comparable_cols.get('quantity', {}).get('po')
     
@@ -381,7 +423,7 @@ def compare_basic(invoice_data, po_data):
         invoice_item_series = get_column_series(invoice_df, invoice_item_col).fillna('').astype(str)
         po_item_series_normalized = get_column_series(po_df, po_item_col).fillna('').astype(str)
         
-        for idx, inv_row in invoice_df.iterrows():
+        for row_pos, (idx, inv_row) in enumerate(invoice_df.iterrows()):
             # Get item from the normalized series instead of the row (use .loc for label-based indexing)
             if idx in invoice_item_series.index:
                 item = str(invoice_item_series.loc[idx] or '').strip()
@@ -401,18 +443,51 @@ def compare_basic(invoice_data, po_data):
                     'description': f'Item "{item}" found in invoice but not in purchase order',
                     'severity': 'High'
                 })
+                # Even if item doesn't match, try to compare price by row position as fallback
+                if invoice_price_col and po_price_col and len(po_df) > 0:
+                    try:
+                        # Try comparing by row position (positional matching)
+                        po_row_pos = min(row_pos, len(po_df) - 1)
+                        po_row = po_df.iloc[po_row_pos]
+                        
+                        inv_price_val = get_row_value(inv_row, invoice_price_col)
+                        po_price_val = get_row_value(po_row, po_price_col)
+                        
+                        inv_price = parse_price(inv_price_val)
+                        po_price = parse_price(po_price_val)
+                        
+                        if inv_price is not None and po_price is not None:
+                            diff = abs(float(inv_price) - float(po_price))
+                            price_threshold = max(0.001, abs(po_price) * 0.001)
+                            if diff > price_threshold:
+                                mismatches.append({
+                                    'type': 'Rate Mismatch (Index-based)',
+                                    'item': item,
+                                    'invoice_value': f"{inv_price:.2f}",
+                                    'po_value': f"{po_price:.2f}",
+                                    'difference': f"{diff:.2f}",
+                                    'severity': 'Medium',
+                                    'description': f'Unit price mismatch (by row position): Invoice={inv_price:.2f}, PO={po_price:.2f}'
+                                })
+                    except Exception:
+                        pass
             else:
                 po_row = po_matches.iloc[0]
                 
                 # Compare price/rate
                 if invoice_price_col and po_price_col:
                     try:
-                        inv_price = pd.to_numeric(get_row_value(inv_row, invoice_price_col) if invoice_price_col else 0, errors='coerce')
-                        po_price = pd.to_numeric(get_row_value(po_row, po_price_col) if po_price_col else 0, errors='coerce')
+                        inv_price_val = get_row_value(inv_row, invoice_price_col)
+                        po_price_val = get_row_value(po_row, po_price_col)
                         
-                        if pd.notna(inv_price) and pd.notna(po_price):
+                        inv_price = parse_price(inv_price_val)
+                        po_price = parse_price(po_price_val)
+                        
+                        if inv_price is not None and po_price is not None:
                             diff = abs(float(inv_price) - float(po_price))
-                            if diff > 0.01:
+                            # Use a more lenient threshold: any difference > 0.001 or > 0.1% of the price
+                            price_threshold = max(0.001, abs(po_price) * 0.001)
+                            if diff > price_threshold:
                                 severity = 'High' if diff > abs(po_price) * 0.1 else 'Medium'
                                 mismatches.append({
                                     'type': 'Rate Mismatch',
@@ -423,7 +498,9 @@ def compare_basic(invoice_data, po_data):
                                     'severity': severity,
                                     'description': f'Unit price mismatch: Invoice={inv_price:.2f}, PO={po_price:.2f}'
                                 })
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        # Log the error for debugging but continue
+                        debug_info.append(f"Price comparison error for item {item}: {str(e)}")
                         pass
                 
                 # Compare quantity
@@ -490,6 +567,53 @@ def compare_basic(invoice_data, po_data):
                     'description': f'Item "{item}" in PO but not found in invoice',
                     'severity': 'High'
                 })
+    
+    # Additional price comparison: Compare all rows by position if price columns exist
+    # This catches price mismatches even when item matching fails
+    if invoice_price_col and po_price_col and len(invoice_df) > 0 and len(po_df) > 0:
+        max_rows = min(len(invoice_df), len(po_df))
+        for row_pos in range(max_rows):
+            try:
+                inv_row = invoice_df.iloc[row_pos]
+                po_row = po_df.iloc[row_pos]
+                
+                inv_price_val = get_row_value(inv_row, invoice_price_col)
+                po_price_val = get_row_value(po_row, po_price_col)
+                
+                inv_price = parse_price(inv_price_val)
+                po_price = parse_price(po_price_val)
+                
+                if inv_price is not None and po_price is not None:
+                    diff = abs(float(inv_price) - float(po_price))
+                    price_threshold = max(0.001, abs(po_price) * 0.001)
+                    if diff > price_threshold:
+                        # Check if this mismatch was already reported
+                        item_name = "Row " + str(row_pos + 1)
+                        if invoice_item_col:
+                            item_val = get_row_value(inv_row, invoice_item_col)
+                            if item_val:
+                                item_name = str(item_val)
+                        
+                        # Only add if not already in mismatches (avoid duplicates)
+                        existing = any(
+                            m.get('item') == item_name and 
+                            m.get('type') == 'Rate Mismatch' and
+                            abs(float(m.get('invoice_value', 0)) - inv_price) < 0.01
+                            for m in mismatches
+                        )
+                        if not existing:
+                            severity = 'High' if diff > abs(po_price) * 0.1 else 'Medium'
+                            mismatches.append({
+                                'type': 'Rate Mismatch',
+                                'item': item_name,
+                                'invoice_value': f"{inv_price:.2f}",
+                                'po_value': f"{po_price:.2f}",
+                                'difference': f"{diff:.2f}",
+                                'severity': severity,
+                                'description': f'Unit price mismatch: Invoice={inv_price:.2f}, PO={po_price:.2f}'
+                            })
+            except Exception:
+                pass
     
     return {
         'mismatches': mismatches,

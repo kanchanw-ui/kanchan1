@@ -147,7 +147,7 @@ def get_all_comparable_columns(invoice_df, po_df):
         'item': [r'item', r'product', r'sku', r'part\s*number', r'code'],
         'description': [r'description', r'desc', r'name', r'details'],
         'quantity': [r'quantity', r'qty', r'amount'],
-        'unit_price': [r'unit\s*price', r'price', r'rate', r'cost'],
+        'unit_price': [r'unit\s*price', r'unit\s*cost', r'unit\s*rate', r'price', r'rate', r'cost', r'unit\s*amount', r'price\s*per\s*unit'],
         'total': [r'total', r'line\s*total', r'amount'],
         'date': [r'date', r'invoice\s*date', r'po\s*date', r'order\s*date']
     }
