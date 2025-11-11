@@ -299,6 +299,27 @@ def compare_basic(invoice_data, po_data):
         find_column_by_pattern, compare_dates, detect_column_type,
         get_all_comparable_columns
     )
+
+    # Helper: when Excel has duplicate column names, df[col] can return a DataFrame.
+    # This ensures we always work with a Series for per-cell string ops.
+    def get_column_series(df, col_name):
+        if col_name is None or not isinstance(df, pd.DataFrame) or col_name not in df.columns:
+            return pd.Series([], dtype="object")
+        col = df[col_name]
+        if isinstance(col, pd.DataFrame):
+            # Take the first occurrence when duplicate column labels exist
+            return col.iloc[:, 0]
+        return col
+
+    # Helper: safely get a scalar from a row even if duplicate labels yield a Series
+    def get_row_value(row, col_name):
+        try:
+            val = row.get(col_name, None)
+        except Exception:
+            val = None
+        if isinstance(val, pd.Series):
+            return val.iloc[0] if len(val) > 0 else None
+        return val
     
     mismatches = []
     duplicates = []
@@ -339,7 +360,8 @@ def compare_basic(invoice_data, po_data):
     
     # Check for duplicates
     if invoice_item_col:
-        valid_items = invoice_df[invoice_item_col].dropna()
+        invoice_items_series = get_column_series(invoice_df, invoice_item_col)
+        valid_items = invoice_items_series.dropna()
         valid_items = valid_items[valid_items.astype(str).str.strip() != '']
         item_counts = valid_items.value_counts()
         
@@ -355,15 +377,22 @@ def compare_basic(invoice_data, po_data):
     
     # Compare items
     if invoice_item_col and po_item_col:
-        invoice_df[invoice_item_col] = invoice_df[invoice_item_col].fillna('').astype(str)
-        po_df[po_item_col] = po_df[po_item_col].fillna('').astype(str)
+        # Get normalized item series (don't assign back to avoid issues with duplicate columns)
+        invoice_item_series = get_column_series(invoice_df, invoice_item_col).fillna('').astype(str)
+        po_item_series_normalized = get_column_series(po_df, po_item_col).fillna('').astype(str)
         
         for idx, inv_row in invoice_df.iterrows():
-            item = str(inv_row.get(invoice_item_col, '')).strip()
+            # Get item from the normalized series instead of the row (use .loc for label-based indexing)
+            if idx in invoice_item_series.index:
+                item = str(invoice_item_series.loc[idx] or '').strip()
+            else:
+                item = str(get_row_value(inv_row, invoice_item_col) or '').strip()
+            
             if not item or item.lower() == 'nan' or item == '':
                 continue
             
-            po_matches = po_df[po_df[po_item_col].astype(str).str.strip().str.lower() == item.lower()]
+            # Use the normalized series for comparison
+            po_matches = po_df[po_item_series_normalized.str.strip().str.lower() == item.lower()]
             
             if po_matches.empty:
                 anomalies.append({
@@ -378,8 +407,8 @@ def compare_basic(invoice_data, po_data):
                 # Compare price/rate
                 if invoice_price_col and po_price_col:
                     try:
-                        inv_price = pd.to_numeric(inv_row.get(invoice_price_col, 0), errors='coerce')
-                        po_price = pd.to_numeric(po_row.get(po_price_col, 0), errors='coerce')
+                        inv_price = pd.to_numeric(get_row_value(inv_row, invoice_price_col) if invoice_price_col else 0, errors='coerce')
+                        po_price = pd.to_numeric(get_row_value(po_row, po_price_col) if po_price_col else 0, errors='coerce')
                         
                         if pd.notna(inv_price) and pd.notna(po_price):
                             diff = abs(float(inv_price) - float(po_price))
@@ -400,8 +429,8 @@ def compare_basic(invoice_data, po_data):
                 # Compare quantity
                 if invoice_qty_col and po_qty_col:
                     try:
-                        inv_qty = pd.to_numeric(inv_row.get(invoice_qty_col, 0), errors='coerce')
-                        po_qty = pd.to_numeric(po_row.get(po_qty_col, 0), errors='coerce')
+                        inv_qty = pd.to_numeric(get_row_value(inv_row, invoice_qty_col) if invoice_qty_col else 0, errors='coerce')
+                        po_qty = pd.to_numeric(get_row_value(po_row, po_qty_col) if po_qty_col else 0, errors='coerce')
                         
                         if pd.notna(inv_qty) and pd.notna(po_qty):
                             diff = abs(float(inv_qty) - float(po_qty))
@@ -421,8 +450,8 @@ def compare_basic(invoice_data, po_data):
                 # Compare dates
                 if invoice_date_col and po_date_col:
                     try:
-                        inv_date = inv_row[invoice_date_col] if invoice_date_col in inv_row.index else None
-                        po_date = po_row[po_date_col] if po_date_col in po_row.index else None
+                        inv_date = get_row_value(inv_row, invoice_date_col) if invoice_date_col in inv_row.index else None
+                        po_date = get_row_value(po_row, po_date_col) if po_date_col in po_row.index else None
                         
                         # Ensure we get scalar values, not Series
                         if isinstance(inv_date, pd.Series):
@@ -446,9 +475,14 @@ def compare_basic(invoice_data, po_data):
                         # Skip date comparison if there's an error
                         pass
         
-        invoice_items = set(invoice_df[invoice_item_col].astype(str).str.strip())
+        # Use the normalized series we already created
+        invoice_items = set(invoice_item_series.str.strip())
         for idx, po_row in po_df.iterrows():
-            item = str(po_row.get(po_item_col, '')).strip()
+            # Get item from the normalized series instead of the row (use .loc for label-based indexing)
+            if idx in po_item_series_normalized.index:
+                item = str(po_item_series_normalized.loc[idx] or '').strip()
+            else:
+                item = str(get_row_value(po_row, po_item_col) or '').strip()
             if item and item != 'nan' and item not in invoice_items:
                 anomalies.append({
                     'type': 'Item Missing in Invoice',
