@@ -500,12 +500,15 @@ def compare_basic(invoice_data, po_data):
                 if similar_idx is not None and similarity >= 0.5:
                     # Found a similar item - report as name mismatch with low severity
                     similar_item = po_item_series_normalized.loc[similar_idx]
-                    anomalies.append({
+                    # Report as mismatch (not just anomaly)
+                    mismatches.append({
                         'type': 'Item Name Mismatch',
                         'item': item,
-                        'description': f'Item name mismatch: Invoice has "{item}" but PO has similar item "{similar_item}" (similarity: {similarity:.1%})',
+                        'invoice_value': item,
+                        'po_value': str(similar_item),
+                        'difference': f"Names differ (similarity: {similarity:.1%})",
                         'severity': 'Low',
-                        'po_item': str(similar_item)
+                        'description': f'Item name mismatch: Invoice has "{item}" but PO has similar item "{similar_item}" (similarity: {similarity:.1%})'
                     })
                     # Use the similar item for price comparison
                     po_row = po_df.loc[similar_idx]
@@ -548,6 +551,31 @@ def compare_basic(invoice_data, po_data):
                             pass
             else:
                 po_row = po_matches.iloc[0]
+            
+            # Always compare item names and report mismatches
+            if po_row is not None and invoice_item_col and po_item_col:
+                try:
+                    po_item_name = str(get_row_value(po_row, po_item_col) or '').strip()
+                    inv_item_name = str(item).strip()
+                    
+                    # Compare item names (case-sensitive comparison)
+                    if inv_item_name and po_item_name and inv_item_name != po_item_name:
+                        # Check if they're similar (fuzzy match)
+                        similarity = string_similarity(inv_item_name, po_item_name)
+                        
+                        if similarity < 1.0:  # Names are different
+                            # Report as mismatch
+                            mismatches.append({
+                                'type': 'Item Name Mismatch',
+                                'item': inv_item_name,
+                                'invoice_value': inv_item_name,
+                                'po_value': po_item_name,
+                                'difference': f"Names differ (similarity: {similarity:.1%})",
+                                'severity': 'Low',
+                                'description': f'Item name mismatch: Invoice has "{inv_item_name}" but PO has "{po_item_name}"'
+                            })
+                except Exception as e:
+                    debug_info.append(f"Item name comparison error: {str(e)}")
             
             # Compare price/rate (for both matched and similar items)
             if po_row is not None and invoice_price_col and po_price_col:
@@ -643,12 +671,15 @@ def compare_basic(invoice_data, po_data):
                     similar_idx, similarity = find_similar_item(item, invoice_item_series_check, threshold=0.5)
                     if similar_idx is not None and similarity >= 0.5:
                         similar_item = invoice_item_series_check.loc[similar_idx]
-                        anomalies.append({
+                        # Report as mismatch (not just anomaly)
+                        mismatches.append({
                             'type': 'Item Name Mismatch',
                             'item': item,
-                            'description': f'Item name mismatch: PO has "{item}" but invoice has similar item "{similar_item}" (similarity: {similarity:.1%})',
+                            'invoice_value': str(similar_item),
+                            'po_value': item,
+                            'difference': f"Names differ (similarity: {similarity:.1%})",
                             'severity': 'Low',
-                            'invoice_item': str(similar_item)
+                            'description': f'Item name mismatch: PO has "{item}" but invoice has similar item "{similar_item}" (similarity: {similarity:.1%})'
                         })
                         similar_found = True
                 
@@ -660,50 +691,74 @@ def compare_basic(invoice_data, po_data):
                         'severity': 'Low'
                     })
     
-    # Additional price comparison: Compare all rows by position if price columns exist
-    # This catches price mismatches even when item matching fails
-    if invoice_price_col and po_price_col and len(invoice_df) > 0 and len(po_df) > 0:
+    # Additional comparison: Compare all rows by position if item columns exist
+    # This catches item name and price mismatches even when item matching fails
+    if invoice_item_col and po_item_col and len(invoice_df) > 0 and len(po_df) > 0:
         max_rows = min(len(invoice_df), len(po_df))
         for row_pos in range(max_rows):
             try:
                 inv_row = invoice_df.iloc[row_pos]
                 po_row = po_df.iloc[row_pos]
                 
-                inv_price_val = get_row_value(inv_row, invoice_price_col)
-                po_price_val = get_row_value(po_row, po_price_col)
+                # Compare item names by position
+                inv_item_name = str(get_row_value(inv_row, invoice_item_col) or '').strip()
+                po_item_name = str(get_row_value(po_row, po_item_col) or '').strip()
                 
-                inv_price = parse_price(inv_price_val)
-                po_price = parse_price(po_price_val)
+                if inv_item_name and po_item_name and inv_item_name.lower() != po_item_name.lower():
+                    # Item names differ - report as mismatch
+                    similarity = string_similarity(inv_item_name, po_item_name)
+                    
+                    # Check if this mismatch was already reported
+                    existing_name_mismatch = any(
+                        m.get('type') == 'Item Name Mismatch' and
+                        (m.get('invoice_value') == inv_item_name or m.get('item') == inv_item_name)
+                        for m in mismatches
+                    )
+                    
+                    if not existing_name_mismatch:
+                        mismatches.append({
+                            'type': 'Item Name Mismatch',
+                            'item': inv_item_name,
+                            'invoice_value': inv_item_name,
+                            'po_value': po_item_name,
+                            'difference': f"Names differ (similarity: {similarity:.1%})",
+                            'severity': 'Low',
+                            'description': f'Item name mismatch (row {row_pos + 1}): Invoice has "{inv_item_name}" but PO has "{po_item_name}"'
+                        })
                 
-                if inv_price is not None and po_price is not None:
-                    diff = abs(float(inv_price) - float(po_price))
-                    price_threshold = max(0.001, abs(po_price) * 0.001)
-                    if diff > price_threshold:
-                        # Check if this mismatch was already reported
-                        item_name = "Row " + str(row_pos + 1)
-                        if invoice_item_col:
-                            item_val = get_row_value(inv_row, invoice_item_col)
-                            if item_val:
-                                item_name = str(item_val)
-                        
-                        # Only add if not already in mismatches (avoid duplicates)
-                        existing = any(
-                            m.get('item') == item_name and 
-                            m.get('type') == 'Rate Mismatch' and
-                            abs(float(m.get('invoice_value', 0)) - inv_price) < 0.01
-                            for m in mismatches
-                        )
-                        if not existing:
-                            severity = 'High' if diff > abs(po_price) * 0.1 else 'Medium'
-                            mismatches.append({
-                                'type': 'Rate Mismatch',
-                                'item': item_name,
-                                'invoice_value': f"{inv_price:.2f}",
-                                'po_value': f"{po_price:.2f}",
-                                'difference': f"{diff:.2f}",
-                                'severity': severity,
-                                'description': f'Unit price mismatch: Invoice={inv_price:.2f}, PO={po_price:.2f}'
-                            })
+                # Compare prices by position
+                if invoice_price_col and po_price_col:
+                    inv_price_val = get_row_value(inv_row, invoice_price_col)
+                    po_price_val = get_row_value(po_row, po_price_col)
+                    
+                    inv_price = parse_price(inv_price_val)
+                    po_price = parse_price(po_price_val)
+                    
+                    if inv_price is not None and po_price is not None:
+                        diff = abs(float(inv_price) - float(po_price))
+                        price_threshold = max(0.001, abs(po_price) * 0.001)
+                        if diff > price_threshold:
+                            # Check if this mismatch was already reported
+                            item_name = inv_item_name if inv_item_name else "Row " + str(row_pos + 1)
+                            
+                            # Only add if not already in mismatches (avoid duplicates)
+                            existing = any(
+                                m.get('item') == item_name and 
+                                m.get('type') == 'Rate Mismatch' and
+                                abs(float(m.get('invoice_value', 0).replace(',', '')) - inv_price) < 0.01
+                                for m in mismatches
+                            )
+                            if not existing:
+                                severity = 'High' if diff > abs(po_price) * 0.1 else 'Medium'
+                                mismatches.append({
+                                    'type': 'Rate Mismatch',
+                                    'item': item_name,
+                                    'invoice_value': f"{inv_price:.2f}",
+                                    'po_value': f"{po_price:.2f}",
+                                    'difference': f"{diff:.2f}",
+                                    'severity': severity,
+                                    'description': f'Unit price mismatch: Invoice={inv_price:.2f}, PO={po_price:.2f}'
+                                })
             except Exception:
                 pass
     
