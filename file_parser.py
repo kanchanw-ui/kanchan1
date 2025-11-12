@@ -24,8 +24,9 @@ class FileParser:
             # Read Excel file
             df = pd.read_excel(file)
             
-            # Clean column names
-            df.columns = df.columns.str.strip()
+            # Clean column names - handle None values
+            df.columns = [str(col).strip() if col is not None else f'Unnamed_{i}' 
+                         for i, col in enumerate(df.columns)]
             
             # Try to identify key columns
             df = self.standardize_columns(df)
@@ -59,10 +60,24 @@ class FileParser:
             # If we found tables, convert to DataFrame
             if table_data:
                 # Use first row as header
-                if len(table_data) > 1:
-                    df = pd.DataFrame(table_data[1:], columns=table_data[0])
-                    df = self.standardize_columns(df)
-                    return df
+                if len(table_data) > 1 and table_data[0] is not None:
+                    # Clean header row - replace None with empty string
+                    header_row = [str(col).strip() if col is not None else f'Column_{i}' 
+                                 for i, col in enumerate(table_data[0])]
+                    # Clean data rows - replace None with empty string
+                    cleaned_data = []
+                    for row in table_data[1:]:
+                        if row is not None:
+                            cleaned_row = [str(cell).strip() if cell is not None else '' for cell in row]
+                            # Ensure row has same length as header
+                            while len(cleaned_row) < len(header_row):
+                                cleaned_row.append('')
+                            cleaned_data.append(cleaned_row[:len(header_row)])
+                    
+                    if cleaned_data:
+                        df = pd.DataFrame(cleaned_data, columns=header_row)
+                        df = self.standardize_columns(df)
+                        return df
             
             # If no tables, try to extract structured data from text
             df = self.extract_data_from_text(text_content)
@@ -80,14 +95,29 @@ class FileParser:
         item_pattern = re.compile(r'(\d+)\s+([A-Za-z0-9\s]+?)\s+(\d+\.?\d*)\s+(\d+\.?\d*)')
         
         for line in lines:
+            if not line or (isinstance(line, str) and not line.strip()):
+                continue
+            # Ensure line is a string
+            line = str(line) if line is not None else ''
             match = item_pattern.search(line)
             if match:
-                data.append({
-                    'Item': match.group(1),
-                    'Description': match.group(2).strip(),
-                    'Quantity': match.group(3),
-                    'Unit Price': match.group(4)
-                })
+                try:
+                    # Safely extract groups, handling None values
+                    item = match.group(1) if match.group(1) else ''
+                    desc_group = match.group(2)
+                    desc = desc_group.strip() if desc_group is not None else ''
+                    qty = match.group(3) if match.group(3) else ''
+                    price = match.group(4) if match.group(4) else ''
+                    
+                    data.append({
+                        'Item': item,
+                        'Description': desc,
+                        'Quantity': qty,
+                        'Unit Price': price
+                    })
+                except (AttributeError, IndexError):
+                    # Skip if match groups are invalid
+                    continue
         
         if data:
             df = pd.DataFrame(data)
@@ -155,6 +185,10 @@ class FileParser:
         
         # Map columns using pattern matching (case-insensitive)
         for old_col in df.columns:
+            # Safely handle None column names
+            if old_col is None:
+                old_col = 'Unnamed'
+            
             old_col_lower = str(old_col).lower().strip()
             
             # Try to match against patterns
@@ -171,7 +205,7 @@ class FileParser:
             # If no pattern match, keep original but clean it
             if not matched:
                 # Clean column name but keep it
-                cleaned = old_col.strip()
+                cleaned = str(old_col).strip() if old_col is not None else 'Unnamed'
                 column_mapping[old_col] = cleaned
         
         # Apply mapping
