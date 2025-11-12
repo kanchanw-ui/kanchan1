@@ -454,8 +454,15 @@ def compare_basic(invoice_data, po_data):
     invoice_qty_col = comparable_cols.get('quantity', {}).get('invoice')
     po_qty_col = comparable_cols.get('quantity', {}).get('po')
     
+    invoice_desc_col = comparable_cols.get('description', {}).get('invoice')
+    po_desc_col = comparable_cols.get('description', {}).get('po')
+    
     invoice_date_col = comparable_cols.get('date', {}).get('invoice')
     po_date_col = comparable_cols.get('date', {}).get('po')
+    
+    # Debug: Log detected description columns
+    if invoice_desc_col or po_desc_col:
+        debug_info.append(f"Detected columns - Invoice Description: {invoice_desc_col}, PO Description: {po_desc_col}")
     
     # Check for duplicates
     if invoice_item_col:
@@ -576,6 +583,31 @@ def compare_basic(invoice_data, po_data):
                             })
                 except Exception as e:
                     debug_info.append(f"Item name comparison error: {str(e)}")
+            
+            # Compare description fields (for both matched and similar items)
+            if po_row is not None and invoice_desc_col and po_desc_col:
+                try:
+                    inv_desc = str(get_row_value(inv_row, invoice_desc_col) or '').strip()
+                    po_desc = str(get_row_value(po_row, po_desc_col) or '').strip()
+                    
+                    # Compare descriptions (case-sensitive comparison)
+                    if inv_desc and po_desc and inv_desc != po_desc:
+                        # Check if they're similar (fuzzy match)
+                        similarity = string_similarity(inv_desc, po_desc)
+                        
+                        if similarity < 1.0:  # Descriptions are different
+                            # Report as mismatch
+                            mismatches.append({
+                                'type': 'Description Mismatch',
+                                'item': item,
+                                'invoice_value': inv_desc,
+                                'po_value': po_desc,
+                                'difference': f"Descriptions differ (similarity: {similarity:.1%})",
+                                'severity': 'Low',
+                                'description': f'Description mismatch: Invoice has "{inv_desc}" but PO has "{po_desc}"'
+                            })
+                except Exception as e:
+                    debug_info.append(f"Description comparison error: {str(e)}")
             
             # Compare price/rate (for both matched and similar items)
             if po_row is not None and invoice_price_col and po_price_col:
@@ -725,6 +757,34 @@ def compare_basic(invoice_data, po_data):
                             'severity': 'Low',
                             'description': f'Item name mismatch (row {row_pos + 1}): Invoice has "{inv_item_name}" but PO has "{po_item_name}"'
                         })
+                
+                # Compare descriptions by position
+                if invoice_desc_col and po_desc_col:
+                    inv_desc = str(get_row_value(inv_row, invoice_desc_col) or '').strip()
+                    po_desc = str(get_row_value(po_row, po_desc_col) or '').strip()
+                    
+                    if inv_desc and po_desc and inv_desc != po_desc:
+                        # Descriptions differ - report as mismatch
+                        similarity = string_similarity(inv_desc, po_desc)
+                        
+                        # Check if this mismatch was already reported
+                        existing_desc_mismatch = any(
+                            m.get('type') == 'Description Mismatch' and
+                            (m.get('invoice_value') == inv_desc or (m.get('item') == inv_item_name and m.get('invoice_value') == inv_desc))
+                            for m in mismatches
+                        )
+                        
+                        if not existing_desc_mismatch:
+                            item_name = inv_item_name if inv_item_name else "Row " + str(row_pos + 1)
+                            mismatches.append({
+                                'type': 'Description Mismatch',
+                                'item': item_name,
+                                'invoice_value': inv_desc,
+                                'po_value': po_desc,
+                                'difference': f"Descriptions differ (similarity: {similarity:.1%})",
+                                'severity': 'Low',
+                                'description': f'Description mismatch (row {row_pos + 1}): Invoice has "{inv_desc}" but PO has "{po_desc}"'
+                            })
                 
                 # Compare prices by position
                 if invoice_price_col and po_price_col:
