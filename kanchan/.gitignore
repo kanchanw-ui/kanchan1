@@ -1,0 +1,38 @@
+# Gmail API credentials
+credentials.json
+token.pickle
+
+# Database
+email_bot.db
+*.db-journal
+
+# Environment variables
+.env
+.env.local
+
+# Google Sheets service account
+service_account.json
+*-credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
